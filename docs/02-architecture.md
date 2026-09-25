@@ -133,7 +133,7 @@ sequenceDiagram
   C-->>R: Loaded hash acknowledgement
 ```
 
-The target umbrella release manifest pins ontology, knowledge, bindings, context profiles, policy, agents, skills, plugins, tool catalog, tests/evals, and runtime compatibility. The current ontology kernel implements only an **ontology sub-manifest** that hashes and verifies its ontology bundle; cross-asset release composition belongs to the later Releases package. Neither form contains plaintext credentials. A running agent keeps its starting snapshot unless an explicitly modeled migration resumes it under a new one. `Published`, `Activated`, and `Loaded` are separate states. Rollback changes future configuration; it does not reverse past source transactions.
+The target umbrella release manifest pins ontology, knowledge, bindings, context profiles, policy, agents, skills, plugins, tool catalog, tests/evals, and runtime compatibility. In v0.2, the ontology kernel supplies the canonical ontology sub-manifest, and `platform-services` assembles a cross-asset manifest containing reviewed ontology and referenced resource snapshots, their revisions/hashes, and deterministic evaluation evidence. PostgreSQL activation checks those records atomically before replacing the active release. Full runtime compatibility negotiation and consumer-loaded acknowledgements remain future gates. Neither manifest contains plaintext credentials. A running agent keeps its starting definitions and original invocation scope ceiling; deactivated releases or revoked grants block continuation. Rollback changes future configuration; it does not reverse source transactions.
 
 ## Live query and context flow
 

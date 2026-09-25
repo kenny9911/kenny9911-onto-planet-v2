@@ -1,0 +1,3 @@
+import {existsSync,readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+export function localEnvironment(test=false){const file=resolve(import.meta.dirname,'../.local/database.json');const config=existsSync(file)?JSON.parse(readFileSync(file,'utf8')):null;const database=test?'onto_planet_test':'onto_planet';const base={...process.env};if(test)delete base.DATABASE_URL;return {...base,...(config?{DATABASE_URL:`postgres://onto_app:${config.appPassword}@127.0.0.1:${config.port}/${database}`,SOURCE_SANDBOX_TOKEN:config.sourceToken}:{}),...((test?process.env.TEST_DATABASE_URL:process.env.DATABASE_URL)?{DATABASE_URL:test?process.env.TEST_DATABASE_URL:process.env.DATABASE_URL}:{})};}

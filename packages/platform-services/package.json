@@ -1,0 +1,16 @@
+{
+  "name": "@ontoplanet/platform-services",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ontoplanet/platform-contracts": "workspace:*",
+    "@ontoplanet/contracts": "workspace:*",
+    "@ontoplanet/ontology-kernel": "workspace:*",
+    "@ontoplanet/extension-registry": "workspace:*",
+    "@ontoplanet/action-gateway": "workspace:*"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1"
+  }
+}
