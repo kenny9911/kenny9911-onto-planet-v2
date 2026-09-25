@@ -131,7 +131,8 @@ function toolName(kind: 'query' | 'action-preview', id: string): string {
 }
 
 /** Projects only an explicit publication allowlist from a verified immutable release. */
-export function projectPublishedOntologyCapabilities(snapshot: PublishedOntologySnapshot): ProjectedTool[] {
+export function projectPublishedOntologyCapabilities(input: PublishedOntologySnapshot): ProjectedTool[] {
+  const snapshot = structuredClone(input);
   if (!verifyReleaseManifest(snapshot.bundle, snapshot.release)) {
     throw new UnpublishedOntologyError('ontology release manifest does not match bundle');
   }
@@ -212,7 +213,7 @@ export function createOntologyToolRegistry(
   releaseStatus: TrustedReleaseStatusSource,
 ) {
   async function assertActive(context: ToolContext, expectedHash?: ReleaseManifest['bundleHash']): Promise<TrustedReleaseStatus> {
-    const status = await releaseStatus.getStatus(context.tenantId, context.releaseId);
+    const status = structuredClone(await releaseStatus.getStatus(context.tenantId, context.releaseId));
     if (!status || status.state !== 'active' || status.tenantId !== context.tenantId ||
       status.releaseId !== context.releaseId || (expectedHash && status.bundleHash !== expectedHash)) {
       throw new UnpublishedOntologyError('ontology release is not active for this tenant and bundle');
@@ -223,7 +224,7 @@ export function createOntologyToolRegistry(
   async function available(context: ToolContext): Promise<ProjectedTool[]> {
     ensureContext(context);
     const status = await assertActive(context);
-    const snapshot = await source.getPublishedSnapshot(context);
+    const snapshot = structuredClone(await source.getPublishedSnapshot(structuredClone(context)));
     if (snapshot.tenantId !== context.tenantId) {
       throw new UnpublishedOntologyError('published snapshot tenant differs from caller tenant');
     }
@@ -240,9 +241,18 @@ export function createOntologyToolRegistry(
 
   return {
     async listTools(context: ToolContext): Promise<OntologyToolDefinition[]> {
+      context = structuredClone(context);
       return (await available(context)).map((tool) => tool.definition);
     },
     async callTool(context: ToolContext, name: string, argumentsValue: unknown): Promise<OntologyToolResult> {
+      context = structuredClone(context);
+      // Capture the request before the first await. Caller-owned objects must
+      // not change the identity or arguments after authorization/validation.
+      try {
+        argumentsValue = JSON.parse(canonicalize(argumentsValue));
+      } catch {
+        return { content: [{ type: 'text', text: 'Invalid tool arguments: expected plain JSON data' }], isError: true };
+      }
       const tool = (await available(context)).find((candidate) => candidate.definition.name === name);
       if (!tool) throw new ToolUnavailableError(name);
       const validate = ajv.compile(tool.definition.inputSchema);

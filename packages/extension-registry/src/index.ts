@@ -6,7 +6,7 @@ const capabilityId = z.string().min(1).max(128).regex(/^[a-zA-Z0-9]+(?:[._:-][a-
 const scope = z.string().min(1).max(128).regex(/^[a-zA-Z0-9]+(?:[._:-][a-zA-Z0-9]+)*$/);
 const packageSpecifier = /^(?:@[a-z0-9-]+\/)?[a-z0-9-]+(?:\/[a-zA-Z0-9._-]+)*$/;
 function isModuleSpecifier(value: string): boolean {
-  if (packageSpecifier.test(value)) return true;
+  if (packageSpecifier.test(value)) return value.split('/').every((segment) => segment !== '.' && segment !== '..');
   if (!value.startsWith('./')) return false;
   const segments = value.slice(2).split('/');
   return segments.every((segment) => segment !== '.' && segment !== '..' && /^[a-zA-Z0-9._-]+$/.test(segment)) &&

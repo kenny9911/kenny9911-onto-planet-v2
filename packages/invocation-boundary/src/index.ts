@@ -27,7 +27,8 @@ export interface PublishedAgent {
 
 /** Must read a reviewed catalog and activation state, not client-provided pins. */
 export interface AgentCatalogPort {
-  resolve(tenantId: string, agentId: string): Promise<PublishedAgent | undefined>;
+  /** With a digest, resolve that original publication without substituting a newer agent. */
+  resolve(tenantId: string, agentId: string, digest?: string): Promise<PublishedAgent | undefined>;
   isActive(tenantId: string, agentId: string, digest: string): Promise<boolean>;
 }
 
@@ -36,6 +37,7 @@ export interface ActionGrantPort {
 }
 
 export interface StoredRun {
+  agentId: string;
   spec: RunSpec;
   prompt: string;
   checkpoint: RunCheckpoint;
@@ -104,9 +106,10 @@ export class TrustedInvocationBoundary {
   }
 
   async startRun(request: { credential: string; agentId: string; prompt: string }): Promise<PublicRunResult> {
+    request = structuredClone(request);
     exactKeys(request, ["credential", "agentId", "prompt"]);
     const principal = await this.principal(request.credential);
-    const deployment = await this.options.agents.resolve(principal.tenantId, request.agentId);
+    const deployment = structuredClone(await this.options.agents.resolve(principal.tenantId, request.agentId));
     if (!deployment || deployment.state !== "active" || deployment.tenantId !== principal.tenantId || deployment.id !== request.agentId) {
       throw new InvocationDeniedError("Agent is not active for this tenant");
     }
@@ -127,25 +130,36 @@ export class TrustedInvocationBoundary {
         deadlineAt: new Date(this.now().getTime() + deployment.limits.maxDurationMs).toISOString(),
       },
     };
-    const result = await this.options.runtime.run(spec, request.prompt);
+    const result = await this.options.runtime.run(structuredClone(spec), request.prompt);
     if (result.status === "approval_required" || result.status === "unknown") {
-      await this.options.checkpointStore.save({ spec, prompt: request.prompt, checkpoint: result.checkpoint });
+      await this.options.checkpointStore.save({ agentId: request.agentId, spec, prompt: request.prompt, checkpoint: result.checkpoint });
     }
     return publicResult(spec.runId, result);
   }
 
   async resumeRun(request: { credential: string; runId: string }): Promise<PublicRunResult> {
+    request = structuredClone(request);
     exactKeys(request, ["credential", "runId"]);
     const principal = await this.principal(request.credential);
-    const record = await this.options.checkpointStore.claim(request.runId, principal.tenantId, principal.actorId);
+    const record = structuredClone(await this.options.checkpointStore.claim(request.runId, principal.tenantId, principal.actorId));
     if (!record) throw new InvocationDeniedError("Run is unavailable for resume");
-    if (record.spec.tenantId !== principal.tenantId || record.spec.actorId !== principal.actorId ||
-        !(await this.options.agents.isActive(principal.tenantId, record.spec.agent.id, record.spec.agent.digest))) {
-      await this.options.checkpointStore.quarantine(request.runId);
-      throw new InvocationDeniedError("Run principal or agent activation changed");
-    }
     try {
-      const result = await this.options.runtime.run(record.spec, record.prompt, record.checkpoint);
+      const deployment = structuredClone(await this.options.agents.resolve(principal.tenantId, record.agentId, record.spec.agent.digest));
+      if (record.spec.tenantId !== principal.tenantId || record.spec.actorId !== principal.actorId ||
+          !deployment || deployment.state !== "active" || deployment.tenantId !== principal.tenantId ||
+          deployment.id !== record.agentId || deployment.agent.id !== record.spec.agent.id || deployment.agent.digest !== record.spec.agent.digest ||
+          !(await this.options.agents.isActive(principal.tenantId, record.agentId, record.spec.agent.digest))) {
+        throw new InvocationDeniedError("Run principal or agent activation changed");
+      }
+      for (const pin of record.spec.tools) {
+        const published = deployment.tools.find((entry) => entry.pin.name === pin.name &&
+          entry.pin.version === pin.version && entry.pin.digest === pin.digest && entry.pin.kind === pin.kind);
+        if (!published || (pin.kind === "action" && published.requiredScopes.length === 0) ||
+            !published.requiredScopes.every((scope) => principal.scopes.includes(scope))) {
+          throw new InvocationDeniedError("Run tool publication or scope grant changed");
+        }
+      }
+      const result = await this.options.runtime.run(structuredClone(record.spec), record.prompt, structuredClone(record.checkpoint));
       await this.options.checkpointStore.complete(request.runId, result);
       return publicResult(request.runId, result);
     } catch (error) {
@@ -158,12 +172,13 @@ export class TrustedInvocationBoundary {
     credential: string; actionId: string; environment: string; args: JsonValue;
     objectRef?: ObjectRef; requestId: string;
   }): Promise<{ state: string; intentHash: string; summary?: string }> {
+    request = structuredClone(request);
     exactKeys(request, ["credential", "actionId", "environment", "args", "objectRef", "requestId"]);
     const principal = await this.principal(request.credential);
-    if (!(await this.options.actionGrants.mayPreview(principal, request.actionId, request.environment))) {
+    if (!(await this.options.actionGrants.mayPreview(structuredClone(principal), request.actionId, request.environment))) {
       throw new InvocationDeniedError("Action preview grant is absent");
     }
-    const snapshot = await this.options.bindings.resolve(principal.tenantId, request.environment, request.actionId);
+    const snapshot = structuredClone(await this.options.bindings.resolve(principal.tenantId, request.environment, request.actionId));
     if (!snapshot || snapshot.state !== "active" || validateActionBinding(snapshot.binding).length ||
         hashActionBinding(snapshot.binding) !== snapshot.bindingHash || snapshot.binding.tenantId !== principal.tenantId ||
         snapshot.binding.environment !== request.environment || snapshot.binding.actionId !== request.actionId) {
@@ -187,8 +202,10 @@ export class TrustedInvocationBoundary {
 
   private async principal(credential: string): Promise<Principal> {
     if (typeof credential !== "string" || !credential) throw new InvocationDeniedError("Authentication is required");
-    const principal = await this.options.identity.authenticate(credential);
-    if (!principal?.tenantId || !principal.actorId || !Array.isArray(principal.scopes)) {
+    const principal = structuredClone(await this.options.identity.authenticate(credential));
+    if (!principal || typeof principal.tenantId !== "string" || !principal.tenantId ||
+        typeof principal.actorId !== "string" || !principal.actorId || !Array.isArray(principal.scopes) ||
+        principal.scopes.some((scope) => typeof scope !== "string" || !scope)) {
       throw new InvocationDeniedError("Authentication failed");
     }
     return principal;

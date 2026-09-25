@@ -114,3 +114,36 @@ test('trusted release activation gates discovery and invocation after revocation
   assert.equal(checks, 3);
   assert.equal(previews, 0);
 });
+
+test('async authorization retains the original caller, validated arguments, and published definition', async () => {
+  const caller = structuredClone(context);
+  const published = structuredClone(snapshot);
+  const input: { sku: string | number } = { sku: 'S-1' };
+  let checks = 0;
+  let queries = 0;
+  const registry = createOntologyToolRegistry({ getPublishedSnapshot(portContext) {
+    portContext.actorId = 'source-imposter';
+    return published;
+  } }, {
+    async queryFunction(actor, definition, args) {
+      queries++;
+      assert.equal(actor.actorId, 'alice');
+      assert.deepEqual(args, { sku: 'S-1' });
+      assert.equal(definition.execution.ref, 'inventory.lookup');
+      return { available: 7 };
+    },
+    async previewAction() { throw new Error('not reached'); },
+  }, { getStatus() {
+    if (++checks === 3) {
+      // This gate runs after schema validation and publication verification.
+      caller.actorId = 'caller-imposter';
+      input.sku = 123;
+      published.bundle.functions[0]!.execution.ref = 'inventory.mutate';
+    }
+    return { tenantId: 'tenant-a', releaseId: release.releaseId, bundleHash: release.bundleHash, state: 'active' };
+  } });
+  const name = projectPublishedOntologyCapabilities(snapshot).find((tool) => tool.definition.kind === 'query')!.definition.name;
+  assert.equal((await registry.callTool(caller, name, input)).isError, undefined);
+  assert.equal(queries, 1);
+  assert.equal(checks, 3);
+});

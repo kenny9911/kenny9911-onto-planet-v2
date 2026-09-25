@@ -55,11 +55,11 @@ The table is intentionally conservative. It must be updated with actual tests an
 | Knowledge Markdown and dependency impact | Specified | No | No | No |
 | OntoMapper and real ERP/CRM/MRP bindings | Specified | Versioned action binding contract and in-memory activation source; no real connector | Two environment bindings, hash pinning, revocation and mock source precondition tests pass | No |
 | Context Profile/Pack/Inspector | Specified | Harness context port only | Tenant-scoped context fixture; no Context Service flow | No |
-| Agent Runtime and Harness | Specified in [runtime design](04-agent-runtime.md) | Bounded model/tool loop, status-only uncertain resume, in-memory checkpoint boundary | Runtime and cross-package procurement fixture tests pass | No |
-| Action gateway and Operator | Specified | Intent/approval/verification/reconciliation gateway; mock adapter only | Duplicate, expiry, source revision, unknown-result and readback fixture tests pass | No |
-| Authenticated invocation boundary | Specified | Identity/catalog/grant ports, trusted run and preview construction, in-memory checkpoint claims | Spoofed authority, actor-bound resume and grant-filter tests pass | No |
-| Skills and Plugins | Specified | Two reusable skills, versioned registry, signed mock ERP preview plugin | Manifest, signature, tamper and narrow-grant fixture tests pass | No |
-| MCP Builder/Context/Consumer surfaces | Specified | Consumer-style scoped query/action-preview registry and SDK Streamable HTTP adapter | List/call, release revocation and HTTP adapter tests pass; client conformance pending | No |
+| Agent Runtime and Harness | Specified in [runtime design](04-agent-runtime.md) | Bounded model/tool loop, status-only uncertain resume, in-memory checkpoint boundary | Mutation isolation, deadline reconciliation, source revision status and procurement fixture tests pass | No |
+| Action gateway and Operator | Specified | Intent/approval/verification/reconciliation gateway; mock adapter only | Duplicate, approval expiry, source revision, readback, stale worker fencing and reconciliation recovery tests pass | No |
+| Authenticated invocation boundary | Specified | Identity/catalog/grant ports, trusted run and preview construction, in-memory checkpoint claims | Input snapshots, spoofed authority, actor-bound resume, original publication and current scope tests pass | No |
+| Skills and Plugins | Specified | Two reusable skills, versioned registry, signed mock ERP preview plugin | Manifest path traversal, signature, tamper and narrow-grant fixture tests pass | No |
+| MCP Builder/Context/Consumer surfaces | Specified | Consumer-style scoped query/action-preview registry and SDK Streamable HTTP adapter | List/call, authorization snapshots, release revocation and HTTP adapter tests pass; client conformance pending | No |
 | AI-FDE, Test Harness, Evaluation | Specified | No product service | No | No |
 | Release review, activation, consumer acknowledgement | Specified | Canonical ontology sub-manifest and trusted MCP release-status port only | Hash and revocation fixture tests; no cross-asset release gate | No |
 | Studio and employee task experience | Specified | No | No | No |

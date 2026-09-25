@@ -21,6 +21,7 @@ export function createOntologyMcpHttpAdapter(registry: OntologyToolRegistry, opt
   if (!options.allowedHosts.length || !options.allowedOriginHostnames.length) {
     throw new TypeError('explicit Host and Origin allowlists are required');
   }
+  options = structuredClone(options);
   return {
     async fetch(request: Request, context: ToolContext): Promise<Response> {
       const rejected = hostHeaderValidationResponse(request, [...options.allowedHosts])
@@ -29,6 +30,7 @@ export function createOntologyMcpHttpAdapter(registry: OntologyToolRegistry, opt
       if (!context?.tenantId || !context.actorId || !context.releaseId) {
         return new Response('Authenticated ontology context required', { status: 401 });
       }
+      context = structuredClone(context);
 
       // The handler and server are scoped to one request, so no tool list or
       // tenant identity can leak across connections or authentication changes.

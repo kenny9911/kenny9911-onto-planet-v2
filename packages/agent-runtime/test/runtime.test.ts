@@ -11,12 +11,19 @@ import {
   RunSpecError,
   type RunSpec,
   type RuntimeEvent,
+  type ToolCallRequest,
 } from "../src/index.js";
 
 const digest = `sha256:${"a".repeat(64)}` as const;
 const toolDigest = `sha256:${"b".repeat(64)}` as const;
 const deadlineAt = "2026-09-26T00:10:00.000Z";
 const now = () => new Date("2026-09-26T00:00:00.000Z");
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((accept) => { resolve = accept; });
+  return { promise, resolve };
+}
 
 function spec(overrides: Partial<RunSpec> = {}): RunSpec {
   return {
@@ -87,6 +94,91 @@ test("runtime refuses model access to an unpinned tool", async () => {
   });
   await assert.rejects(runtime.run(spec(), "prompt"), RunSpecError);
   assert.equal(toolCalls, 0);
+});
+
+test("a model adapter cannot add a tool to the authoritative run specification", async () => {
+  let toolCalls = 0;
+  const runtime = new AgentRuntime({
+    now, audit: { async append() {} }, context: { async load() { return []; } },
+    model: { async next(request) {
+      request.spec.tools = [...request.spec.tools, { name: "raw_erp_write", version: "1.0.0", digest: toolDigest, kind: "action" }];
+      return { type: "tool", toolName: "raw_erp_write", args: {} };
+    } },
+    tools: { async call() { toolCalls++; return { status: "completed", output: {} }; }, async status() { throw new Error("not reached"); } },
+  });
+  await assert.rejects(runtime.run(spec(), "prompt"), /unpinned tool/);
+  assert.equal(toolCalls, 0);
+});
+
+test("caller, model, and tool mutations cannot change pinned authority or pending arguments", async () => {
+  const contextReady = deferred<[]>();
+  const contextEntered = deferred<void>();
+  const proposed = { type: "tool" as const, toolName: "release_order", args: { orderId: "PO-42" } };
+  const runSpec = spec();
+  const runtime = new AgentRuntime({
+    now,
+    audit: { async append(event) { if (event.kind === "model_decision") proposed.args.orderId = "PO-99"; } },
+    context: { async load() { contextEntered.resolve(); return contextReady.promise; } },
+    model: { async next(request) {
+      assert.equal(request.spec.actorId, "operator-a");
+      request.spec.actorId = "model-admin";
+      (request.history as { role: "user"; text: string }[])[0] = { role: "user", text: "Changed history" };
+      return proposed;
+    } },
+    tools: {
+      async call(request) {
+        assert.equal(request.actorId, "operator-a");
+        assert.deepEqual(request.args, { orderId: "PO-42" });
+        (request.args as { orderId: string }).orderId = "PO-100";
+        return { status: "approval_required", intentHash: digest, summary: "Approval required" };
+      },
+      async status() { throw new Error("not reached"); },
+    },
+  });
+  const running = runtime.run(runSpec, "Release PO-42");
+  await contextEntered.promise;
+  runSpec.actorId = "caller-admin";
+  runSpec.tools = [];
+  contextReady.resolve([]);
+  const result = await running;
+  assert.equal(result.status, "approval_required");
+  assert.equal(result.checkpoint.pendingTool?.actorId, "operator-a");
+  assert.deepEqual(result.checkpoint.pendingTool?.args, { orderId: "PO-42" });
+  assert.deepEqual(result.checkpoint.history[0], { role: "user", text: "Release PO-42" });
+});
+
+test("expired runs retain uncertain effects and only inspect their outcome", async () => {
+  let instant = now();
+  let calls = 0;
+  let checks = 0;
+  let modelCalls = 0;
+  let resolved = false;
+  const runtime = new AgentRuntime({
+    now: () => instant,
+    audit: { async append() {} }, context: { async load() { return []; } },
+    model: { async next() { modelCalls++; return { type: "tool", toolName: "release_order", args: { orderId: "PO-42" } }; } },
+    tools: {
+      async call() { calls++; return { status: "unknown", reason: "Connection lost" }; },
+      async status(request) {
+        checks++;
+        assert.equal(request.deadlineAt, deadlineAt);
+        return resolved ? { status: "completed", output: { receipt: "erp-42" } } : { status: "ready" };
+      },
+    },
+  });
+  const first = await runtime.run(spec(), "Release PO-42");
+  assert.equal(first.status, "unknown");
+  instant = new Date("2026-09-26T00:11:00.000Z");
+  const second = await runtime.run(spec(), "Release PO-42", first.checkpoint);
+  assert.equal(second.status, "unknown");
+  assert.ok(second.checkpoint.pendingTool);
+  resolved = true;
+  const third = await runtime.run(spec(), "Release PO-42", second.checkpoint);
+  assert.equal(third.status, "timed_out");
+  assert.equal(third.checkpoint.pendingTool, undefined);
+  assert.equal(calls, 1);
+  assert.equal(modelCalls, 1);
+  assert.equal(checks, 2);
 });
 
 test("uncertain non-gateway action is status-checked on resume and never dispatched again", async () => {
@@ -182,4 +274,38 @@ test("gateway action tool pauses for hash-bound approval and resumes without ano
   assert.equal(resumed.text, "Order released.");
   assert.equal(modelCalls, 2);
   assert.equal(connectorCalls, 1);
+});
+
+test("action status retains the original revision after verified source changes", async () => {
+  let sourceRevision = "v1";
+  let sourceObjectId = "PO-42";
+  const gateway = new ActionGateway({
+    now, store: new InMemoryIntentStore(),
+    policy: { async evaluate() { return { decision: "allow", reason: "fixture", approval: "none", policyVersion: digest }; } },
+    approvalAuthority: { async verify() { return true; } },
+    connector: {
+      async preview() { return { summary: "Release order", effects: ["status becomes released"] }; },
+      async execute() { sourceRevision = "v2"; return { status: "accepted", receipt: { externalOperationId: "erp-42", acceptedAt: now().toISOString() } }; },
+      async verify() { return { status: "verified", evidence: { revision: sourceRevision } }; },
+      async reconcile() { throw new Error("not needed"); },
+    },
+  });
+  const tools = new GatewayActionToolPort(gateway, {
+    release_order: {
+      actionId: "order.release", environment: "sandbox", bindingHash: `sha256:${"c".repeat(64)}`,
+      target: { system: "erp", operation: "release", resource: "orders" }, version: "1.0.0", digest: toolDigest,
+      resolveObjectRef: () => ({ objectTypeId: "Order", objectId: sourceObjectId, expectedRevision: sourceRevision }),
+    },
+  });
+  const request: ToolCallRequest = {
+    tenantId: "tenant-a", actorId: "operator-a", runId: "run-1", ontologyRelease: digest,
+    deadlineAt, toolName: "release_order", toolVersion: "1.0.0", toolDigest,
+    args: { orderId: "PO-42" }, idempotencyKey: "run-1:1", signal: new AbortController().signal,
+  };
+  assert.equal((await tools.call(request)).status, "completed");
+  assert.equal(sourceRevision, "v2");
+  assert.equal((await tools.status(request)).status, "completed");
+  assert.equal((await gateway.get("tenant-a", "run-1:1"))?.intent.objectRef?.expectedRevision, "v1");
+  sourceObjectId = "PO-99";
+  assert.equal((await tools.status(request)).status, "denied");
 });

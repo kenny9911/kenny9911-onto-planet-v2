@@ -14,18 +14,24 @@ export interface ActionToolBinding {
 
 /** Maps pinned action tools to the gateway; never exposes a connector to the model. */
 export class GatewayActionToolPort implements ToolPort {
+  private readonly bindings: Readonly<Record<string, ActionToolBinding>>;
+
   constructor(
     private readonly gateway: ActionGateway,
-    private readonly bindings: Readonly<Record<string, ActionToolBinding>>,
-  ) {}
+    bindings: Readonly<Record<string, ActionToolBinding>>,
+  ) {
+    this.bindings = Object.fromEntries(Object.entries(bindings).map(([name, binding]) =>
+      [name, { ...binding, target: structuredClone(binding.target) }]));
+  }
 
   async call(request: ToolCallRequest): Promise<ToolResult> {
+    request = snapshotRequest(request);
     const binding = this.bindings[request.toolName];
     if (!binding || binding.version !== request.toolVersion || binding.digest !== request.toolDigest) {
       return { status: "denied", reason: "Action tool is not registered at the pinned version and digest" };
     }
     if (request.signal.aborted) return { status: "unknown", reason: "Tool request was aborted before dispatch" };
-    const objectRef = binding.resolveObjectRef?.(request);
+    const objectRef = binding.resolveObjectRef?.(snapshotRequest(request));
     let record = await this.gateway.createIntent({
       tenantId: request.tenantId,
       actorId: request.actorId,
@@ -46,25 +52,36 @@ export class GatewayActionToolPort implements ToolPort {
   }
 
   async status(request: ToolCallRequest): Promise<ToolStatus> {
+    request = snapshotRequest(request);
     const binding = this.bindings[request.toolName];
     if (!binding || binding.version !== request.toolVersion || binding.digest !== request.toolDigest) {
       return { status: "denied", reason: "Action tool is not registered at the pinned version and digest" };
     }
     const record = await this.gateway.get(request.tenantId, request.idempotencyKey);
     if (!record) return { status: "unknown", reason: "Action intent is absent; no execution may be assumed" };
-    const objectRef = binding.resolveObjectRef?.(request);
+    const objectRef = binding.resolveObjectRef?.(snapshotRequest(request));
     if (record.intent.actorId !== request.actorId || record.intent.runId !== request.runId ||
         record.intent.ontologyRelease !== request.ontologyRelease || record.intent.actionId !== binding.actionId ||
         record.intent.environment !== binding.environment || record.intent.bindingHash !== binding.bindingHash ||
         record.intent.deadlineAt !== request.deadlineAt ||
         canonicalJson(record.intent.args) !== canonicalJson(request.args) ||
         canonicalJson(record.intent.target) !== canonicalJson(binding.target) ||
-        canonicalJson(record.intent.objectRef ?? null) !== canonicalJson(objectRef ?? null)) {
+        canonicalJson(objectIdentity(record.intent.objectRef)) !== canonicalJson(objectIdentity(objectRef))) {
       return { status: "denied", reason: "Stored intent does not match pinned action tool" };
     }
     if (record.state === "ready") return { status: "ready" };
     return toToolResult(record);
   }
+}
+
+function snapshotRequest(request: ToolCallRequest): ToolCallRequest {
+  const { signal, ...snapshot } = request;
+  return { ...structuredClone(snapshot), signal };
+}
+
+/** Status preserves the intent's original revision: a completed write may advance the live revision. */
+function objectIdentity(reference: ObjectRef | undefined): JsonValue {
+  return reference ? { objectTypeId: reference.objectTypeId, objectId: reference.objectId } : null;
 }
 
 function toToolResult(record: IntentRecord): ToolResult {

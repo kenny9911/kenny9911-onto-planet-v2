@@ -9,10 +9,19 @@ import {
   type Approval,
   type ConnectorPort,
   type PolicyDecision,
+  type ExecutionOutcome,
+  type ReconciliationOutcome,
+  type VerificationOutcome,
 } from "../src/index.js";
 
 const release = `sha256:${"a".repeat(64)}`;
 const clock = () => new Date("2026-09-26T00:00:00.000Z");
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 function input(overrides: Partial<ActionIntentInput> = {}): ActionIntentInput {
   return {
@@ -246,4 +255,137 @@ test("accepted connector response succeeds only after source-system verification
   assert.equal(done.state, "succeeded");
   assert.equal(done.verification?.status, "verified");
   assert.equal(counts.verify, 1);
+});
+
+test("late execution cannot verify using the reservation owned by reconciliation", async () => {
+  let time = clock();
+  const execution = deferred<ExecutionOutcome>();
+  const executing = deferred<void>();
+  const verification = deferred<VerificationOutcome>();
+  const verifying = deferred<void>();
+  const verifiedReceipts: string[] = [];
+  let reconciliations = 0;
+  const gateway = new ActionGateway({
+    now: () => time,
+    executionLeaseMs: 1000,
+    store: new InMemoryIntentStore(),
+    policy: { async evaluate() { return { decision: "allow", reason: "allowed", approval: "none", policyVersion: release }; } },
+    approvalAuthority: { async verify() { return true; } },
+    connector: {
+      async preview() { return { summary: "Release", effects: [] }; },
+      async execute() { executing.resolve(); return execution.promise; },
+      async reconcile() {
+        reconciliations++;
+        return { status: "accepted", receipt: { externalOperationId: "reconciled", acceptedAt: time.toISOString() } };
+      },
+      async verify(_intent, receipt) {
+        verifiedReceipts.push(receipt.externalOperationId);
+        if (receipt.externalOperationId === "reconciled") { verifying.resolve(); return verification.promise; }
+        return { status: "failed", reason: "stale receipt" };
+      },
+    },
+  });
+  await gateway.createIntent(input());
+  await gateway.preview("tenant-a", "run-1:1");
+  const original = gateway.execute("tenant-a", "run-1:1");
+  await executing.promise;
+  time = new Date(time.getTime() + 1001);
+  const recovery = gateway.reconcile("tenant-a", "run-1:1");
+  await verifying.promise;
+  // Reconciliation gets a fresh lease; the original expired lease cannot reclaim it immediately.
+  assert.equal((await gateway.reconcile("tenant-a", "run-1:1")).state, "verifying");
+  assert.equal(reconciliations, 1);
+  execution.resolve({ status: "accepted", receipt: { externalOperationId: "original", acceptedAt: time.toISOString() } });
+  assert.equal((await original).state, "verifying");
+  assert.deepEqual(verifiedReceipts, ["reconciled"]);
+  verification.resolve({ status: "verified", evidence: { state: "released" } });
+  const recovered = await recovery;
+  assert.equal(recovered.state, "succeeded");
+  assert.equal(recovered.receipt?.externalOperationId, "reconciled");
+  assert.equal(recovered.events.filter((event) => event.kind === "execution_accepted").length, 1);
+});
+
+for (const staleOutcome of [
+  { status: "accepted", receipt: { externalOperationId: "stale", acceptedAt: clock().toISOString() } },
+  { status: "rejected", reason: "stale rejection" },
+  { status: "unknown", reason: "stale unknown" },
+  { status: "pending", reason: "stale pending" },
+] satisfies ReconciliationOutcome[]) {
+  test(`stale reconciliation is recoverable and its late ${staleOutcome.status} result cannot replace a new attempt`, async () => {
+    let time = clock();
+    const firstLookup = deferred<ReconciliationOutcome>();
+    const firstStarted = deferred<void>();
+    const secondLookup = deferred<ReconciliationOutcome>();
+    const secondStarted = deferred<void>();
+    let writes = 0;
+    let lookups = 0;
+    let verifications = 0;
+    const gateway = new ActionGateway({
+      now: () => time,
+      executionLeaseMs: 1000,
+      store: new InMemoryIntentStore(),
+      policy: { async evaluate() { return { decision: "allow", reason: "allowed", approval: "none", policyVersion: release }; } },
+      approvalAuthority: { async verify() { return true; } },
+      connector: {
+        async preview() { return { summary: "Release", effects: [] }; },
+        async execute() { writes++; return { status: "unknown", reason: "response lost" }; },
+        async reconcile() {
+          lookups++;
+          if (lookups === 1) { firstStarted.resolve(); return firstLookup.promise; }
+          secondStarted.resolve();
+          return secondLookup.promise;
+        },
+        async verify() { verifications++; return { status: "verified", evidence: { state: "released" } }; },
+      },
+    });
+    await gateway.createIntent(input());
+    await gateway.preview("tenant-a", "run-1:1");
+    await gateway.execute("tenant-a", "run-1:1");
+    const first = gateway.reconcile("tenant-a", "run-1:1");
+    await firstStarted.promise;
+    time = new Date(time.getTime() + 1001);
+    const second = gateway.reconcile("tenant-a", "run-1:1");
+    await secondStarted.promise;
+    firstLookup.resolve(staleOutcome);
+    assert.equal((await first).state, "reconciling");
+    assert.equal(verifications, 0);
+    secondLookup.resolve({ status: "accepted", receipt: { externalOperationId: "recovered", acceptedAt: time.toISOString() } });
+    const recovered = await second;
+    assert.equal(recovered.state, "succeeded");
+    assert.equal(recovered.receipt?.externalOperationId, "recovered");
+    assert.equal(writes, 1);
+    assert.equal(lookups, 2);
+    assert.equal(verifications, 1);
+  });
+}
+
+test("approval expiry is checked again after the authority verification wait", async () => {
+  let time = clock();
+  let authorityChecks = 0;
+  let writes = 0;
+  const gateway = new ActionGateway({
+    now: () => time,
+    store: new InMemoryIntentStore(),
+    policy: { async evaluate() { return { decision: "allow", reason: "allowed", approval: "required", policyVersion: release, risk: "high", approvalMaxTtlMs: 60_000 }; } },
+    approvalAuthority: { async verify() {
+      if (++authorityChecks === 2) time = new Date("2026-09-26T00:00:10.000Z");
+      return true;
+    } },
+    connector: {
+      async preview() { return { summary: "Release", effects: [] }; },
+      async execute() { writes++; return { status: "unknown", reason: "must not execute" }; },
+      async verify() { return { status: "unknown", reason: "unused" }; },
+      async reconcile() { return { status: "unknown", reason: "unused" }; },
+    },
+  });
+  const intent = await gateway.createIntent(input({ deadlineAt: "2026-09-26T00:01:00.000Z" }));
+  await gateway.preview("tenant-a", "run-1:1");
+  await gateway.approve("tenant-a", "run-1:1", {
+    tenantId: "tenant-a", intentHash: intent.intent.intentHash, approverId: "supervisor-b",
+    evidenceId: "approval-1", decision: "approved", decidedAt: time.toISOString(), expiresAt: "2026-09-26T00:00:10.000Z",
+  });
+  const denied = await gateway.execute("tenant-a", "run-1:1");
+  assert.equal(denied.state, "denied");
+  assert.equal(writes, 0);
+  assert.deepEqual(denied.events.at(-1)?.details, { reason: "Approval expired" });
 });

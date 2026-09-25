@@ -149,6 +149,7 @@ export interface IntentRecord {
   verification?: VerificationOutcome;
   unknownReason?: string;
   executionReservedAt?: string;
+  reconciliationReservedAt?: string;
   events: AuditEvent[];
 }
 

@@ -229,12 +229,12 @@ export class ActionGateway {
     } catch (error) {
       outcome = { status: "unknown", reason: `Connector did not return a definitive result: ${message(error)}` };
     }
-    return this.finishExecution(tenantId, idempotencyKey, outcome, "executing");
+    return this.finishExecution(reserved, outcome);
   }
 
   async reconcile(tenantId: string, idempotencyKey: string): Promise<IntentRecord> {
     const record = await this.required(tenantId, idempotencyKey);
-    if (record.state !== "unknown" && !this.isStaleExecution(record)) return record;
+    if (record.state !== "unknown" && !this.isStaleAttempt(record)) return record;
     const reserved = await this.reserveReconciliation(tenantId, idempotencyKey);
     if (!reserved.won) return reserved.record;
     let outcome: ReconciliationOutcome;
@@ -244,15 +244,14 @@ export class ActionGateway {
       outcome = { status: "unknown", reason: `Reconciliation unavailable: ${message(error)}` };
     }
     if (outcome.status === "pending" || outcome.status === "unknown") {
-      return this.update(tenantId, idempotencyKey, (current) => {
-        if (current.state !== "reconciling") return false;
+      const updated = await this.updateOwned(reserved.record, (current) => {
         current.state = "unknown";
         current.unknownReason = outcome.reason;
         current.events.push(this.event(current.intent, "reconciliation_pending", { reason: outcome.reason }));
-        return true;
       });
+      return updated.record;
     }
-    return this.finishExecution(tenantId, idempotencyKey, outcome, "reconciling");
+    return this.finishExecution(reserved.record, outcome);
   }
 
   private async reserveExecution(tenantId: string, key: string): Promise<{ won: boolean; record: IntentRecord }> {
@@ -260,6 +259,9 @@ export class ActionGateway {
       const current = await this.required(tenantId, key);
       if (current.state !== "ready") return { won: false, record: current };
       if (this.expired(current.intent)) return { won: false, record: await this.deny(current, "Action intent deadline expired") };
+      if (current.policy?.approval === "required" && current.approval?.expiresAt && Date.parse(current.approval.expiresAt) <= this.now().getTime()) {
+        return { won: false, record: await this.deny(current, "Approval expired") };
+      }
       const next = structuredClone(current);
       next.state = "executing";
       next.executionReservedAt = this.timestamp();
@@ -272,41 +274,40 @@ export class ActionGateway {
   private async reserveReconciliation(tenantId: string, key: string): Promise<{ won: boolean; record: IntentRecord }> {
     for (;;) {
       const current = await this.required(tenantId, key);
-      if (current.state !== "unknown" && !this.isStaleExecution(current)) return { won: false, record: current };
+      if (current.state !== "unknown" && !this.isStaleAttempt(current)) return { won: false, record: current };
       const next = structuredClone(current);
       next.state = "reconciling";
+      next.reconciliationReservedAt = this.timestamp();
       next.version++;
       next.events.push(this.event(next.intent, "reconciliation_started", {}));
       if (await this.options.store.compareAndSwap(next, current.version)) return { won: true, record: next };
     }
   }
 
-  private async finishExecution(tenantId: string, key: string, outcome: ExecutionOutcome, source: "executing" | "reconciling"): Promise<IntentRecord> {
+  private async finishExecution(reservation: IntentRecord, outcome: ExecutionOutcome): Promise<IntentRecord> {
     if (outcome.status === "unknown") {
-      return this.update(tenantId, key, (current) => {
-        if (current.state !== source) return false;
+      const updated = await this.updateOwned(reservation, (current) => {
         current.state = "unknown";
         current.unknownReason = outcome.reason;
         current.events.push(this.event(current.intent, "execution_unknown", { reason: outcome.reason }));
-        return true;
       });
+      return updated.record;
     }
     if (outcome.status === "rejected") {
-      return this.update(tenantId, key, (current) => {
-        if (current.state !== source) return false;
+      const updated = await this.updateOwned(reservation, (current) => {
         current.state = "failed";
         current.events.push(this.event(current.intent, "execution_rejected", { reason: outcome.reason }));
-        return true;
       });
+      return updated.record;
     }
-    const verifying = await this.update(tenantId, key, (current) => {
-      if (current.state !== source) return false;
+    const transition = await this.updateOwned(reservation, (current) => {
       current.state = "verifying";
       current.receipt = outcome.receipt;
       current.events.push(this.event(current.intent, "execution_accepted", { externalOperationId: outcome.receipt.externalOperationId }));
-      return true;
     });
-    if (verifying.state !== "verifying") return verifying;
+    // A superseded worker must not verify against another attempt's state.
+    if (!transition.won) return transition.record;
+    const verifying = transition.record;
     let verification: VerificationOutcome;
     try {
       verification = await this.options.connector.verify(verifying.intent, outcome.receipt);
@@ -330,7 +331,7 @@ export class ActionGateway {
       }
     completed.version++;
     if (await this.options.store.compareAndSwap(completed, verifying.version)) return completed;
-    return this.required(tenantId, key);
+    return this.required(reservation.intent.tenantId, reservation.intent.idempotencyKey);
   }
 
   private async evaluate(intent: ActionIntent): Promise<PolicyDecision> {
@@ -345,10 +346,25 @@ export class ActionGateway {
     }
   }
 
-  private isStaleExecution(record: IntentRecord): boolean {
-    return (record.state === "executing" || record.state === "verifying") &&
-      !!record.executionReservedAt &&
-      Date.parse(record.executionReservedAt) + this.executionLeaseMs <= this.now().getTime();
+  private isStaleAttempt(record: IntentRecord): boolean {
+    if (record.state !== "executing" && record.state !== "verifying" && record.state !== "reconciling") return false;
+    const reservedAt = record.state === "executing"
+      ? record.executionReservedAt
+      : record.reconciliationReservedAt ?? record.executionReservedAt;
+    return !!reservedAt && Date.parse(reservedAt) + this.executionLeaseMs <= this.now().getTime();
+  }
+
+  /** A completion belongs to one reservation version, even when a newer attempt has the same state. */
+  private async updateOwned(reservation: IntentRecord, mutate: (record: IntentRecord) => void): Promise<{ won: boolean; record: IntentRecord }> {
+    const tenantId = reservation.intent.tenantId;
+    const key = reservation.intent.idempotencyKey;
+    const current = await this.required(tenantId, key);
+    if (current.version !== reservation.version || current.state !== reservation.state) return { won: false, record: current };
+    const next = structuredClone(current);
+    mutate(next);
+    next.version++;
+    if (await this.options.store.compareAndSwap(next, reservation.version)) return { won: true, record: next };
+    return { won: false, record: await this.required(tenantId, key) };
   }
 
   private expired(intent: ActionIntent): boolean {
