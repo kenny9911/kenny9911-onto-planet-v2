@@ -1,0 +1,25 @@
+{
+  "name": "onto-planet-v2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "pnpm build && node --test dist/packages/*/test/*.test.js dist/tests/*.test.js",
+    "check": "pnpm test"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.1.0",
+    "ajv": "^8.17.1",
+    "zod": "^4.0.0"
+  }
+}

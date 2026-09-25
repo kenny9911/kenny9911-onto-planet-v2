@@ -1,0 +1,14 @@
+{
+  "apiVersion": "ontoplanet.io/v1",
+  "kind": "Skill",
+  "metadata": {
+    "id": "ontoplanet.ontology-modeler",
+    "version": "0.1.0",
+    "name": "Ontology modeler",
+    "description": "Turn source-system evidence and business language into a reviewable ontology draft."
+  },
+  "spec": {
+    "instructionFile": "SKILL.md",
+    "suggestedCapabilities": []
+  }
+}

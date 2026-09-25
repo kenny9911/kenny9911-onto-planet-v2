@@ -1,0 +1,13 @@
+{
+  "name": "@ontoplanet/mcp-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.1.0",
+    "@ontoplanet/contracts": "workspace:*",
+    "@ontoplanet/extension-registry": "workspace:*",
+    "@ontoplanet/ontology-kernel": "workspace:*",
+    "ajv": "^8.17.1"
+  }
+}

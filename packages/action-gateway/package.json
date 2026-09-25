@@ -1,0 +1,10 @@
+{
+  "name": "@ontoplanet/action-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ontoplanet/contracts": "workspace:*",
+    "@ontoplanet/ontology-kernel": "workspace:*"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "@ontoplanet/ontology-kernel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic validation, policy evaluation, and immutable ontology releases"
+}

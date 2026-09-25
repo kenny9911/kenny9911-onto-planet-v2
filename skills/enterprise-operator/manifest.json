@@ -1,0 +1,14 @@
+{
+  "apiVersion": "ontoplanet.io/v1",
+  "kind": "Skill",
+  "metadata": {
+    "id": "ontoplanet.enterprise-operator",
+    "version": "0.1.0",
+    "name": "Enterprise operator design",
+    "description": "Design safe action contracts for ERP, CRM, MRP, and custom application operators."
+  },
+  "spec": {
+    "instructionFile": "SKILL.md",
+    "suggestedCapabilities": []
+  }
+}

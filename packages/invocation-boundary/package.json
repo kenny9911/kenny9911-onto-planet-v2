@@ -1,0 +1,10 @@
+{
+  "name": "@ontoplanet/invocation-boundary",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ontoplanet/agent-runtime": "workspace:*",
+    "@ontoplanet/action-gateway": "workspace:*"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "@ontoplanet/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Portable, versioned Onto Planet V2 semantic contracts"
+}

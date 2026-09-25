@@ -1,0 +1,46 @@
+{
+  "apiVersion": "ontoplanet.io/v1",
+  "kind": "Plugin",
+  "metadata": {
+    "id": "ontoplanet.mock-erp",
+    "version": "0.1.0",
+    "name": "Mock ERP preview adapter",
+    "description": "Local example for stock lookup and reservation preview; no external ERP integration."
+  },
+  "spec": {
+    "runtime": {
+      "kind": "in-process",
+      "module": "./mock-adapter.js"
+    },
+    "requestedCapabilities": [
+      {
+        "capabilityId": "function.lookup",
+        "scopes": [
+          "inventory:read"
+        ]
+      },
+      {
+        "capabilityId": "action.reserve",
+        "scopes": [
+          "inventory:write"
+        ]
+      }
+    ],
+    "skillRefs": [
+      {
+        "id": "ontoplanet.ontology-modeler",
+        "version": "0.1.0"
+      },
+      {
+        "id": "ontoplanet.enterprise-operator",
+        "version": "0.1.0"
+      }
+    ]
+  },
+  "signature": {
+    "format": "ontoplanet-json-v1",
+    "algorithm": "Ed25519",
+    "keyId": "ontoplanet.example-key",
+    "value": "0DWXqqEN2D6MfbQalrsXDPr_L5kNXpoGY3wCxRbPRnFv2QzuiCYCsHpnonGCDFuFq7ZlUqItlxmce_jQB3v7AA"
+  }
+}

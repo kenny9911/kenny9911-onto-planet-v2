@@ -1,0 +1,9 @@
+# Semantica: current fit assessment
+
+**Checked:** 2026-09-26. The latest listed [Semantica release is v0.7.0](https://github.com/semantica-agi/semantica/releases/tag/v0.7.0), released 2026-09-22. Its release notes report a smaller core install, moving heavier ML, visualization, parsing, and ingestion dependencies into optional extras. The [project README](https://github.com/semantica-agi/semantica) describes parsing, extraction, conflict detection, deduplication, graph construction, ontology/reasoning, provenance, contextual retrieval, and MCP access.
+
+Semantica is a strong **candidate adapter** for OntoXForm, OntoGen discovery, entity resolution, context graph, and provenance experiments. It is not the authoritative Onto Planet ontology, identity service, permission engine, action gateway, or release gate. Its graph and extraction representations should be translated into our canonical contracts. FDEs must confirm business meaning, exceptions, action semantics, and system bindings before publication.
+
+Adoption requires a pinned version and a small contract suite against known positive and negative fixtures. Compare it with the baseline parser/extractor on actual business tasks, including factual provenance, conflict handling, latency, cost, and installation footprint. Keep it in an optional Python worker so core ontology modeling, binding, testing, context, and release do not depend on it.
+
+The prior [shared design](https://chatgpt.com/share/6ab6a918-827c-83ec-86c5-f022cdc6ea5e) identified a validator-path concern. Because v0.7.0 also advertises new ontology quality tooling, we will verify the exact API behavior before using any Semantica validation result as a production release check. Regardless of that result, Onto Planet's own deterministic checks remain authoritative for its release contract.
