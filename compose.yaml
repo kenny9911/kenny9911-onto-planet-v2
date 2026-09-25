@@ -1,0 +1,75 @@
+name: onto-planet
+services:
+  database:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: onto_admin
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Run node scripts/configure-docker.mjs}
+      POSTGRES_DB: onto_planet
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Run node scripts/configure-docker.mjs}
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./infra/init-db.sql:/docker-entrypoint-initdb.d/10-app-role.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U onto_admin -d onto_planet']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  api:
+    build: .
+    image: onto-planet:local
+    environment: &app-environment
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:4100}
+      DATABASE_URL: postgres://onto_app:${APP_DB_PASSWORD}@database:5432/onto_planet
+      EMBED_WORKER: 'false'
+      SETUP_TOKEN: ${SETUP_TOKEN:?Run node scripts/configure-docker.mjs}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-sandbox}
+      MODEL_ID: ${MODEL_ID:-}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OPERATOR_ALLOWED_ORIGINS: ${OPERATOR_ALLOWED_ORIGINS:-http://source-sandbox:4200}
+      OPERATOR_ALLOWED_PRIVATE_ORIGINS: ${OPERATOR_ALLOWED_PRIVATE_ORIGINS:-}
+      ALLOW_LOCAL_SANDBOX: 'true'
+      SOURCE_SANDBOX_URL: http://source-sandbox:4200
+      SOURCE_SANDBOX_TOKEN: ${SOURCE_SANDBOX_TOKEN:?Run node scripts/configure-docker.mjs}
+    ports: ['127.0.0.1:4100:4100']
+    depends_on:
+      database: {condition: service_healthy}
+      source-sandbox: {condition: service_healthy}
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:4100/health',{headers:{host:new URL(process.env.APP_ORIGIN).host}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+  worker:
+    image: onto-planet:local
+    environment: *app-environment
+    command: ['node', 'dist/apps/api/src/worker-main.js']
+    depends_on:
+      api: {condition: service_healthy}
+    restart: unless-stopped
+  source-sandbox:
+    build: .
+    image: onto-planet:local
+    environment:
+      DATABASE_URL: postgres://onto_app:${APP_DB_PASSWORD}@database:5432/onto_planet
+      SOURCE_HOST: 0.0.0.0
+      SOURCE_TENANT_ID: default
+      SOURCE_SANDBOX_TOKEN: ${SOURCE_SANDBOX_TOKEN}
+    command: ['node', 'dist/apps/source-sandbox/src/main.js']
+    depends_on:
+      database: {condition: service_healthy}
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:4200/health',{headers:{authorization:'Bearer '+process.env.SOURCE_SANDBOX_TOKEN,'x-tenant-id':'default'}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+volumes:
+  database:

@@ -1,6 +1,6 @@
 {
   "name": "onto-planet-v2",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.15.0",
@@ -8,18 +8,34 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "test": "pnpm build && node --test dist/packages/*/test/*.test.js dist/tests/*.test.js",
-    "check": "pnpm test"
+    "build:server": "tsc -p tsconfig.build.json",
+    "build:studio": "pnpm --filter @ontoplanet/studio build",
+    "build": "pnpm build:server && pnpm build:studio",
+    "test": "pnpm build && node scripts/test.mjs",
+    "test:e2e": "tsc -p tests/e2e/tsconfig.json --noEmit && playwright test",
+    "test:unit": "pnpm build:server && node scripts/test.mjs --unit",
+    "check": "pnpm test",
+    "setup:local": "node scripts/local-database.mjs && pnpm db:migrate",
+    "db:migrate": "node scripts/with-env.mjs pnpm exec tsx scripts/migrate.ts",
+    "db:stop": "node scripts/local-database.mjs --stop",
+    "start": "node scripts/start.mjs",
+    "dev:api": "node scripts/with-env.mjs pnpm exec tsx watch apps/api/src/main.ts",
+    "dev:studio": "pnpm --filter @ontoplanet/studio dev",
+    "source:sandbox": "node scripts/with-env.mjs pnpm exec tsx apps/source-sandbox/src/main.ts",
+    "worker": "node scripts/with-env.mjs pnpm exec tsx apps/api/src/worker-main.ts"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "24.13.6",
+    "@types/pg": "^8.23.1",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.1.0",
     "ajv": "^8.17.1",
+    "jose": "^6.2.12",
+    "pg": "^8.23.0",
     "zod": "^4.0.0"
   }
 }

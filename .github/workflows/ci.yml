@@ -12,7 +12,21 @@ jobs:
   validate:
     name: Build and test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: onto_admin
+          POSTGRES_PASSWORD: onto_admin_test_password
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U onto_admin -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      POSTGRES_ADMIN_URL: postgres://onto_admin:onto_admin_test_password@127.0.0.1:5432/postgres
+      TEST_DATABASE_URL: postgres://onto_ci:onto_ci_test_password@127.0.0.1:5432/onto_planet_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,4 +40,10 @@ jobs:
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
       - name: Build and test
-        run: pnpm check
+        run: |
+          node scripts/ci-database.mjs
+          pnpm check
+      - name: Install browser
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Verify browser workflow
+        run: pnpm test:e2e

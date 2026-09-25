@@ -1,58 +1,77 @@
 # Onto Planet V2
 
-Onto Planet V2 is a new enterprise AI platform built around an **operational ontology**: a versioned model of business objects, relationships, rules, actions, and access. It connects enterprise knowledge and live systems to people, agents, and approved office clients.
+Onto Planet V2 is an enterprise AI platform built around a versioned operational ontology: business objects, relationships, rules, actions, and access. The runnable **v0.2** includes a React Studio, authenticated API and MCP endpoint, PostgreSQL persistence, a leased job worker, an agent harness, and a governed HTTP operator.
 
-This repository starts from an empty directory. The current code is a **foundation slice**, not a deployed enterprise platform. The design covers the complete target product; the implementation ledger in [Delivery plan](docs/05-delivery-plan.md) separates designed, implemented, verified, and production-ready capabilities.
+The included procurement workspace runs against a separate local HTTP source system. An agent reads a purchase order, proposes an action, waits for an independent person to approve it, executes with a source revision and idempotency key, and verifies the receipt. A lost response leads to reconciliation without replaying the write. Customer ERP, CRM, MRP, identity, and model deployments require their own configuration and acceptance evidence.
 
-## Product shape
+## Run locally
 
-- **Build:** AI-assisted domain discovery, OntoXForm/OntoGen, ontology modeling, system bindings, context profiles, tests, evaluations, and releases.
-- **Use:** authorized object queries, evidence-backed context, reusable skills, and agentic applications that act through governed ontology actions.
-- **Govern:** identity, object and field policy, approvals, versioned releases, source-system receipts, lineage, audit, and quality gates.
-
-The new Agent Runtime, Harness, and Operator are first-class parts of V2. A model may propose an action, but deterministic policy and source-system verification decide and record its execution. ERP, CRM, MRP, and other systems remain authoritative for their business records.
-
-## Read the design
-
-1. [Product principles and experience](docs/01-product-principles.md)
-2. [Platform architecture](docs/02-architecture.md)
-3. [Ontology V2 contract](docs/03-ontology-v2.md)
-4. [Agent Runtime, Harness, Operator, Skills, plugins, and MCP](docs/04-agent-runtime.md)
-5. [Delivery plan and capability ledger](docs/05-delivery-plan.md)
-6. [Requirements trace](docs/requirements-traceability.md)
-7. [Current Palantir research](docs/research/palantir-current.md) and [Semantica research](docs/research/semantica-current.md)
-
-The [original shared design conversation](https://chatgpt.com/share/6ab6a918-827c-83ec-86c5-f022cdc6ea5e) is the source brief. Its v0.2 product expansion is retained; its earlier decision to leave the Agent Runtime outside Onto Planet is superseded by the current request.
-
-## Develop the foundation
-
-Use Node.js 24 or newer and pnpm 9.15.0.
+Use Node.js 24+, pnpm 9.15.0, and installed PostgreSQL 17 or 18 binaries. The setup script creates an isolated cluster under `.local/` and separate application/test databases.
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm check
+pnpm setup:local
+pnpm build
+pnpm start
 ```
 
-`pnpm check` builds the TypeScript packages and runs the package tests. The current packages use in-process ports and fixtures; they do not access production systems or require secrets. Review package-level tests for the behaviors that exist today.
+Open [localhost:4100](http://localhost:4100), create the first administrator, then add a second operator in **Settings**. Run `Approve PO-2026-001` in **Task runner** and use the other account to approve the request. The default planner is a deterministic sandbox demonstration and needs no model API key.
 
-GitHub Actions runs the same locked install and validation gate for pull requests and pushes to `main`.
+For Docker:
+
+```sh
+node scripts/configure-docker.mjs
+docker compose up --build -d
+```
+
+Use the generated `SETUP_TOKEN` from the private `.env` file for first-admin setup. See [installation](docs/06-installation.md) for prerequisites, model and identity configuration, MCP clients, and the complete walkthrough; see the [runbook](docs/runbook.md) for operations and recovery and the [API and extension guide](docs/07-api-and-extensions.md) for integrations.
+
+## Build, Use, Govern
+
+- **Build:** ontology graph and definition editing, source-linked knowledge transformation, JSON/CSV/text ontology proposals, connectors, context profiles, agents, Skills, applications, and extension metadata.
+- **Use:** authorized object queries and relationships, bounded context packs, task runs, approval waits, receipts, source projection refresh, and scoped MCP queries/action previews.
+- **Govern:** roles, sessions and scoped tokens, tenant/row/field controls, policy simulation, deterministic evaluations, reviewed releases, audit, and reconciliation.
+
+Ontology proposals use deterministic extraction by default or an optional configured HTTPS model adapter, with schema/source validation and explicit review gaps. Live provider quality remains unverified. Plugins have manifest/signature/grant validation and catalog management; the server does not execute arbitrary plugin code. The browser/UI operator, broad office-client compatibility, autonomous AI-FDE, production scaling, and full Palantir parity are not delivered claims. The [capability ledger](docs/05-delivery-plan.md) records the exact boundaries.
+
+## Validate
+
+```sh
+pnpm check
+pnpm exec playwright install chromium
+pnpm test:e2e
+```
+
+These gates build the server and Studio, run unit/integration tests, and exercise the browser workflow. They require a PostgreSQL test database. `pnpm setup:local` supplies it; otherwise configure `TEST_DATABASE_URL`. Database suites use unique schemas. `pnpm test:unit` is an explicit reduced check and does not satisfy the repository delivery gate. GitHub Actions uses a PostgreSQL service and runs both gates.
 
 ## Repository layout
 
 ```text
-apps/                 Runnable surfaces as they are implemented
-packages/contracts/   Shared semantic and execution contracts
-packages/ontology-kernel/
-packages/agent-runtime/
-packages/action-gateway/
-packages/invocation-boundary/
-packages/mcp-gateway/
-packages/extension-registry/
-skills/               Reusable task instruction packages
-plugins/              Versioned extension manifests and examples
-examples/             Business-task examples and safe fixtures
-docs/                 Product, architecture, research, decisions, delivery ledger
+apps/studio/                 React Studio
+apps/api/                    Authenticated HTTP API, MCP, application startup
+apps/worker/                 Leased job consumer
+apps/source-sandbox/         Separate HTTP procurement source and receipt tables
+packages/contracts/          Ontology and execution definitions
+packages/ontology-kernel/    Validation, finite rules, canonical release hashes
+packages/platform-contracts/ Shared application/storage contracts
+packages/persistence/       PostgreSQL stores, sessions, jobs, audit, checkpoints
+packages/identity/          Local identity, scoped tokens, configurable OIDC
+packages/platform-services/ Knowledge, proposals, objects, context, evaluations, releases
+packages/platform-runtime/  Runtime orchestration, providers, HTTP operators
+packages/agent-runtime/     Bounded model/tool harness
+packages/action-gateway/    Policy, exact approvals, execution, verification, reconciliation
+packages/invocation-boundary/ Trusted invocation and resume authority
+packages/mcp-gateway/       Scoped MCP publication and transport
+packages/extension-registry/ Skills/plugins, signatures and capability grants
+skills/                     Reusable task procedures
+plugins/                    Signed example extension and manifests
+docs/                       Architecture, research, decisions, installation, operations
 ```
 
-Package boundaries describe ownership and dependencies. They do not require a separate microservice for each package or a generated application per tenant.
-# kenny9911-onto-planet-v2
+Tenant behavior comes from reviewed definitions and bindings within this shared application.
+
+## Design references
+
+Start with [product principles](docs/01-product-principles.md), [architecture](docs/02-architecture.md), [Ontology V2](docs/03-ontology-v2.md), and [Agent Runtime, Harness and Operator](docs/04-agent-runtime.md). The [requirements trace](docs/requirements-traceability.md), [Palantir research](docs/research/palantir-current.md), and [Semantica research](docs/research/semantica-current.md) connect the implementation to its sources. Those design documents include future scope; use the delivery ledger for implementation status.
+
+The [original shared design](https://chatgpt.com/share/6ab6a918-827c-83ec-86c5-f022cdc6ea5e) remains the source brief. The user's later request makes the native Agent Runtime and Harness part of Onto Planet V2.
