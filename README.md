@@ -35,6 +35,8 @@ pnpm check
 
 `pnpm check` builds the TypeScript packages and runs the package tests. The current packages use in-process ports and fixtures; they do not access production systems or require secrets. Review package-level tests for the behaviors that exist today.
 
+GitHub Actions runs the same locked install and validation gate for pull requests and pushes to `main`.
+
 ## Repository layout
 
 ```text

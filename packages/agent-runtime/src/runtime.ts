@@ -33,6 +33,8 @@ export class AgentRuntime {
   }
 
   async run(spec: RunSpec, prompt: string, trustedCheckpoint?: RunCheckpoint): Promise<RunResult> {
+    spec = structuredClone(spec);
+    trustedCheckpoint = structuredClone(trustedCheckpoint);
     validateSpec(spec);
     const specHash = digestJson(spec);
     const promptHash = digestJson(prompt);
@@ -80,6 +82,9 @@ export class AgentRuntime {
 
     for (;;) {
       if (this.now().getTime() >= Date.parse(spec.limits.deadlineAt)) {
+        if (checkpoint.pendingTool && checkpoint.pendingToolOutcome !== "approval_required") {
+          return this.inspectExpiredAction(spec, checkpoint);
+        }
         await this.audit(spec, "run_timed_out", {});
         return { status: "timed_out", reason: "Run deadline elapsed", checkpoint };
       }
@@ -95,12 +100,12 @@ export class AgentRuntime {
       }
       let decision;
       try {
-        decision = await this.withDeadline(spec, (signal) => this.options.model.next({
-          spec,
-          context: checkpoint.context,
-          history: checkpoint.history,
+        decision = structuredClone(await this.withDeadline(spec, (signal) => this.options.model.next({
+          spec: structuredClone(spec),
+          context: structuredClone(checkpoint.context),
+          history: structuredClone(checkpoint.history),
           signal,
-        }));
+        })));
       } catch (error) {
         if (isDeadline(error)) {
           await this.audit(spec, "run_timed_out", { phase: "model" });
@@ -111,6 +116,7 @@ export class AgentRuntime {
       checkpoint.modelCalls++;
       await this.audit(spec, "model_decision", { type: decision.type, modelCalls: checkpoint.modelCalls });
       if (decision.type === "final") {
+        if (typeof decision.text !== "string") throw new RunSpecError("Model returned an invalid final response");
         checkpoint.history.push({ role: "assistant", text: decision.text });
         await this.audit(spec, "run_completed", { modelCalls: checkpoint.modelCalls, toolCalls: checkpoint.toolCalls });
         return { status: "completed", text: decision.text, checkpoint };
@@ -146,7 +152,7 @@ export class AgentRuntime {
     if (inspectFirst) {
       let status: ToolStatus;
       try {
-        status = await this.withDeadline(spec, (signal) => this.options.tools.status({ ...request, signal }));
+        status = structuredClone(await this.withDeadline(spec, (signal) => this.options.tools.status({ ...structuredClone(request), signal })));
       } catch (error) {
         status = { status: "unknown", reason: `Tool status unavailable: ${String(error)}` };
       }
@@ -167,11 +173,33 @@ export class AgentRuntime {
     await this.audit(spec, "tool_dispatched", { toolName: request.toolName, idempotencyKey: request.idempotencyKey });
     let result: ToolResult;
     try {
-      result = await this.withDeadline(spec, (signal) => this.options.tools.call({ ...request, signal }));
+      result = structuredClone(await this.withDeadline(spec, (signal) => this.options.tools.call({ ...structuredClone(request), signal })));
     } catch (error) {
       result = { status: "unknown", reason: isDeadline(error) ? "Tool call exceeded deadline; reconcile before resuming" : String(error) };
     }
     return this.consumeToolResult(spec, request, checkpoint, result);
+  }
+
+  /** An execution deadline prevents effects, but must not erase an uncertain source outcome. */
+  private async inspectExpiredAction(spec: RunSpec, checkpoint: RunCheckpoint): Promise<RunResult> {
+    const request = checkpoint.pendingTool!;
+    let status: ToolStatus;
+    try {
+      const inspectionSpec = { ...spec, limits: { ...spec.limits, deadlineAt: new Date(this.now().getTime() + 5_000).toISOString() } };
+      status = structuredClone(await this.withDeadline(inspectionSpec, (signal) => this.options.tools.status({ ...structuredClone(request), signal })));
+    } catch (error) {
+      status = { status: "unknown", reason: `Tool status unavailable: ${String(error)}` };
+    }
+    await this.audit(spec, "tool_status_checked", { toolName: request.toolName, status: status.status });
+    if (status.status === "completed" || status.status === "denied") {
+      await this.consumeToolResult(spec, request, checkpoint, status);
+      await this.audit(spec, "run_timed_out", {});
+      return { status: "timed_out", reason: `Run deadline elapsed; pending tool is ${status.status}`, checkpoint };
+    }
+    checkpoint.pendingToolOutcome = "unknown";
+    const reason = "Run deadline elapsed; pending source outcome still requires reconciliation";
+    await this.audit(spec, "run_suspended", { status: "unknown", reason });
+    return { status: "unknown", reason, checkpoint };
   }
 
   private async consumeToolResult(spec: RunSpec, request: ToolCallRequestSnapshot, checkpoint: RunCheckpoint, result: ToolResult): Promise<RunResult | undefined> {

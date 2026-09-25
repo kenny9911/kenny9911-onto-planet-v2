@@ -30,6 +30,9 @@ test('manifest validation is versioned, strict, and rejects path traversal', () 
     plugin.spec.requestedCapabilities[0], plugin.spec.requestedCapabilities[0],
   ] } }));
   assert.throws(() => parsePluginManifest({ ...plugin, spec: { ...plugin.spec, runtime: { kind: 'in-process', module: '../secret' } } }));
+  for (const module of ['@acme/workflow/../../secret', 'workflow/../secret', '@acme/workflow/./entry']) {
+    assert.throws(() => parsePluginManifest({ ...plugin, spec: { ...plugin.spec, runtime: { kind: 'in-process', module } } }));
+  }
 });
 
 test('bundled reusable skill manifests validate and request no authority', () => {
